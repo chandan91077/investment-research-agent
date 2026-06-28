@@ -137,3 +137,12 @@ Open [http://localhost:3000](http://localhost:3000) in your browser to view the 
 1. **Recursive Vector Retrieval**: Implement a vector database (like Pinecone) to index scraped content, enabling semantic retrieval of specific balance sheet footnotes.
 2. **Multi-Agent Debates**: Setup a LangGraph workflow with two opposing nodes ("Bull Analyst" vs "Bear Analyst") debating the valuation before passing data to the "Committee Chair" node.
 3. **Historical Data Plotting**: Integrate a charting library (like Recharts) in the UI to visualize 3-year historical revenue and margin trajectories.
+
+---
+
+## 🎁 Bonus: LLM Pair-Programming Transcript
+
+As part of the assignment requirements to detail my engineering approach and interactive pair-programming sessions with the LLM, the full session transcripts are recorded inside:
+*   [LLM_CHAT_TRANSCRIPT.md](file:///c:/Users/chand/OneDrive/Desktop/papa/investment-research-agent/LLM_CHAT_TRANSCRIPT.md)
+
+This log shows our developer journey: designing schemas, configuring search nodes, implementing Vercel fallback compatibility, and fixing model 404 access restrictions.
