@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { spawn } from "child_process";
 import readline from "readline";
+import { runJsAgent } from "../../../lib/agent/jsAgent";
 
 export const dynamic = "force-dynamic";
 
@@ -35,9 +36,38 @@ export async function GET(request: NextRequest) {
         sendEvent("ping", {});
       }, 5000);
 
-      // Spawn the Python agent using the Windows 'py' launcher (Python 3.11.4)
+      let spawned = false;
+      let fallbackTriggered = false;
+
+      // Spawn the Python agent using the Windows 'py' launcher
       const pyProcess = spawn("py", ["src/lib/agent/agent.py", company], {
         windowsHide: true,
+      });
+
+      pyProcess.on("spawn", () => {
+        spawned = true;
+      });
+
+      // Handle spawn error (e.g. Vercel environment where Python is not available)
+      pyProcess.on("error", async (err) => {
+        if (!spawned && !fallbackTriggered) {
+          fallbackTriggered = true;
+          console.warn("Python execution not available. Falling back to LangGraph.js Agent...", err);
+          
+          try {
+            await runJsAgent(
+              company,
+              (log) => sendEvent("log", { message: log }),
+              (result) => sendEvent("result", { result })
+            );
+          } catch (jsErr: any) {
+            console.error("JS Fallback Error:", jsErr);
+            sendEvent("error", { message: jsErr.message || "Execution encountered an error." });
+          } finally {
+            clearInterval(pingInterval);
+            controller.close();
+          }
+        }
       });
 
       // Use readline to parse the Python stdout line by line
@@ -47,12 +77,13 @@ export async function GET(request: NextRequest) {
       });
 
       rl.on("line", (line) => {
+        if (fallbackTriggered) return;
         const trimmed = line.trim();
         if (!trimmed) return;
 
         try {
           // The Python agent outputs pre-formatted JSON lines matching our SSE protocol
-          JSON.parse(trimmed); // Validate it's JSON
+          JSON.parse(trimmed); 
           controller.enqueue(encoder.encode(`data: ${trimmed}\n\n`));
         } catch (e) {
           // If stdout was not structured JSON, send as raw system log
@@ -68,12 +99,12 @@ export async function GET(request: NextRequest) {
 
       // Listen to subprocess stderr for stack traces and warnings
       pyProcess.stderr.on("data", (data) => {
+        if (fallbackTriggered) return;
         const errStr = data.toString().trim();
         if (!errStr) return;
 
         console.error("Python Stderr:", errStr);
 
-        // If the stderr looks like a trace or real exception, stream it to UI
         if (errStr.toLowerCase().includes("error") || errStr.toLowerCase().includes("exception")) {
           sendEvent("log", {
             message: {
@@ -88,6 +119,8 @@ export async function GET(request: NextRequest) {
       // Handle process close
       pyProcess.on("close", (code) => {
         clearInterval(pingInterval);
+        if (fallbackTriggered) return; // Let the fallback handle stream closure
+
         if (code !== 0) {
           sendEvent("error", { message: `Python agent exited with error code ${code}` });
         }
@@ -97,7 +130,9 @@ export async function GET(request: NextRequest) {
       // Terminate Python process if the client aborts the network connection
       request.signal.addEventListener("abort", () => {
         clearInterval(pingInterval);
-        pyProcess.kill();
+        if (spawned && !fallbackTriggered) {
+          pyProcess.kill();
+        }
       });
     },
   });
@@ -107,7 +142,7 @@ export async function GET(request: NextRequest) {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache, no-transform",
       "Connection": "keep-alive",
-      "X-Accel-Buffering": "no", // Disable buffering on proxies
+      "X-Accel-Buffering": "no", 
     },
   });
 }
