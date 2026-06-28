@@ -62,7 +62,21 @@ export async function decisionNode(state: any) {
       
       pushLog(`Structured decision JSON successfully compiled. Verdict: [${breakdown.verdict}] with confidence ${breakdown.confidenceScore}%`);
     } catch (err: any) {
-      pushLog(`Decision structuring failed: ${err.message}. Defaulting to pre-compiled structured layout.`, 'error');
+      let extra = "";
+      if (err.message?.includes("404")) {
+        try {
+          const apiKey = process.env.GEMINI_API_KEY;
+          if (apiKey && apiKey !== "mock") {
+            const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+            const data = await res.json();
+            if (data.models) {
+              const list = data.models.map((m: any) => m.name.replace("models/", ""));
+              extra = ` // [HELP] Available models on this key: ${list.join(", ")}. Configure GEMINI_MODEL in your env.`;
+            }
+          }
+        } catch (e) {}
+      }
+      pushLog(`Decision structuring failed: ${err.message}${extra}. Defaulting to pre-compiled structured layout.`, 'error');
       breakdown = getMockVerdict(state.companyName);
     }
   } else {

@@ -39,7 +39,21 @@ export async function analysisNode(state: any) {
       analysisText = typeof response.content === 'string' ? response.content : JSON.stringify(response.content);
       pushLog(`Analyst model completed processing. Synthesis report generated.`);
     } catch (err: any) {
-      pushLog(`LLM Analysis error: ${err.message}. Falling back to pre-compiled reports.`, 'error');
+      let extra = "";
+      if (err.message?.includes("404")) {
+        try {
+          const apiKey = process.env.GEMINI_API_KEY;
+          if (apiKey && apiKey !== "mock") {
+            const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+            const data = await res.json();
+            if (data.models) {
+              const list = data.models.map((m: any) => m.name.replace("models/", ""));
+              extra = ` // [HELP] Available models on this key: ${list.join(", ")}. Configure GEMINI_MODEL in your env.`;
+            }
+          }
+        } catch (e) {}
+      }
+      pushLog(`LLM Analysis error: ${err.message}${extra}. Falling back to pre-compiled reports.`, 'error');
       analysisText = getMockAnalysisText(state.companyName);
     }
   } else {
