@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
-import { graph } from "../../../lib/agent/graph";
+import { spawn } from "child_process";
+import readline from "readline";
 
 export const dynamic = "force-dynamic";
 
@@ -34,58 +35,70 @@ export async function GET(request: NextRequest) {
         sendEvent("ping", {});
       }, 5000);
 
-      try {
-        sendEvent("log", {
-          message: {
-            timestamp: new Date().toLocaleTimeString(),
-            source: "system",
-            message: `Establishing connection with Investment Research Agent...`,
-          },
-        });
+      // Spawn the Python agent using the Windows 'py' launcher (Python 3.11.4)
+      const pyProcess = spawn("py", ["src/lib/agent/agent.py", company], {
+        windowsHide: true,
+      });
 
-        let ticker = company.toUpperCase();
+      // Use readline to parse the Python stdout line by line
+      const rl = readline.createInterface({
+        input: pyProcess.stdout,
+        terminal: false,
+      });
 
-        // Stream LangGraph updates node by node
-        const graphStream = await graph.stream({ companyName: company });
+      rl.on("line", (line) => {
+        const trimmed = line.trim();
+        if (!trimmed) return;
 
-        for await (const chunk of graphStream) {
-          const nodeName = Object.keys(chunk)[0];
-          const nodeOutput = (chunk as any)[nodeName];
-
-          if (!nodeOutput) continue;
-
-          // Capture the ticker symbol from the research node
-          if (nodeName === "research" && nodeOutput.ticker) {
-            ticker = nodeOutput.ticker;
-          }
-
-          // Stream logs from the executing node in real-time
-          if (nodeOutput.logs && Array.isArray(nodeOutput.logs)) {
-            for (const log of nodeOutput.logs) {
-              sendEvent("log", { message: log });
-              // Small artificial delay to let UI read logs smoothly
-              await new Promise((resolve) => setTimeout(resolve, 150));
-            }
-          }
-
-          // Stream the final verdict breakdown from the decision node
-          if (nodeName === "decide" && nodeOutput.breakdown) {
-            sendEvent("result", {
-              result: {
-                companyName: company,
-                ticker: ticker,
-                breakdown: nodeOutput.breakdown,
-              },
-            });
-          }
+        try {
+          // The Python agent outputs pre-formatted JSON lines matching our SSE protocol
+          JSON.parse(trimmed); // Validate it's JSON
+          controller.enqueue(encoder.encode(`data: ${trimmed}\n\n`));
+        } catch (e) {
+          // If stdout was not structured JSON, send as raw system log
+          sendEvent("log", {
+            message: {
+              timestamp: new Date().toLocaleTimeString(),
+              source: "system",
+              message: trimmed,
+            },
+          });
         }
-      } catch (error: any) {
-        console.error("Agent execution error:", error);
-        sendEvent("error", { message: error.message || "Execution encountered an error." });
-      } finally {
+      });
+
+      // Listen to subprocess stderr for stack traces and warnings
+      pyProcess.stderr.on("data", (data) => {
+        const errStr = data.toString().trim();
+        if (!errStr) return;
+
+        console.error("Python Stderr:", errStr);
+
+        // If the stderr looks like a trace or real exception, stream it to UI
+        if (errStr.toLowerCase().includes("error") || errStr.toLowerCase().includes("exception")) {
+          sendEvent("log", {
+            message: {
+              timestamp: new Date().toLocaleTimeString(),
+              source: "error",
+              message: errStr,
+            },
+          });
+        }
+      });
+
+      // Handle process close
+      pyProcess.on("close", (code) => {
         clearInterval(pingInterval);
+        if (code !== 0) {
+          sendEvent("error", { message: `Python agent exited with error code ${code}` });
+        }
         controller.close();
-      }
+      });
+
+      // Terminate Python process if the client aborts the network connection
+      request.signal.addEventListener("abort", () => {
+        clearInterval(pingInterval);
+        pyProcess.kill();
+      });
     },
   });
 
@@ -94,7 +107,7 @@ export async function GET(request: NextRequest) {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache, no-transform",
       "Connection": "keep-alive",
-      "X-Accel-Buffering": "no", // Disable buffering in Nginx/Vercel proxies
+      "X-Accel-Buffering": "no", // Disable buffering on proxies
     },
   });
 }
